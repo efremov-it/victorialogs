@@ -1,0 +1,84 @@
+version: '3.9'
+
+services:
+  vector:
+    image: docker.io/timberio/vector:0.37.1-debian
+    restart: on-failure
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+      - type: bind
+        source: /var/lib/docker
+        target: /var/lib/docker
+      - /var/log/:/var/log
+      - ./collector/vector.yaml:/etc/vector/vector.yaml:ro
+    user: root
+    # ports:
+    #   - '8686:8686'
+    depends_on:
+      victorialogs:
+        condition: service_healthy
+      victoriametrics:
+        condition: service_healthy
+  
+  grafana:
+    # image: grafana/grafana-enterprise
+    build:
+      context: .
+      dockerfile: grafana/Dockerfile
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: victorialogs-datasource,victoriametrics-datasource
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      # - ./grafana/plugins:/var/lib/grafana/plugins
+    ports:
+     - '127.0.0.1:3000:3000'
+
+  victorialogs:
+    image: docker.io/victoriametrics/victoria-logs:v0.5.2-victorialogs
+    volumes:
+      - victorialogs-vector-docker-vl:/vlogs
+    ports:
+      - '127.0.0.1:9428:9428'
+    command:
+      - -storageDataPath=/vlogs
+      - -loggerFormat=json
+      - -retentionPeriod=2y
+      - -pushmetrics.extraLabel='instance=victorialogs'
+      # - -httpAuth.username=admin
+      # - -httpAuth.password=password
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9428/health"]
+      interval: 1s
+      timeout: 1s
+      retries: 10
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    ports:
+      - '127.0.0.1:8428:8428'
+    command:
+      - -storageDataPath=/vmsingle
+      - -promscrape.config=/promscrape.yml
+      - -loggerFormat=json
+    volumes:
+      - victorialogs-vector-docker-vm:/vmsingle
+      - ./victoriametrics/scrape.yml:/promscrape.yml
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8428/health"]
+      interval: 1s
+      timeout: 1s
+      retries: 10
+
+  nginx:
+    image: nginx
+    ports: [ "127.0.0.1:8082:80" ]
+    labels:
+      com.docker.victorialogs: "True"
+volumes:
+  victorialogs-vector-docker-vl:
+  victorialogs-vector-docker-vm:
+  grafana_data:

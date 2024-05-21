@@ -1,0 +1,83 @@
+api:
+  enabled: true
+  address: 0.0.0.0:8686
+
+sources:
+  demo_logs_json:
+    type: demo_logs
+    interval: 1
+    format: json
+  demo_logs_syslog:
+    type: "demo_logs"
+    format: "syslog"
+    count: 100
+    interval: 1
+  docker_logs:
+    type: docker_logs
+    auto_partial_merge: true
+    include_labels:
+      - "com.docker.victorialogs=True"
+  system_files:
+    type: file
+    include:
+      - /var/log/auth.log
+      - /var/log/syslog
+transforms:
+  system_files_remap:
+    type: remap
+    inputs:
+      - system_files
+    source: |-
+      structured = parse_syslog!(.message)
+      . = merge(., structured)
+      .timestamp_test = to_unix_timestamp!(.timestamp)
+      del(.timestamp)
+      .project = "local_test"
+    # .message = parse_json!(.message)
+    # .project = "local_test"
+  syslog_remap:
+    type: remap
+    inputs: [demo_logs_syslog]
+    source: |-
+      structured = parse_syslog!(.message)
+      . = merge(., structured)
+      .project = "local_test"
+
+sinks:
+  console:
+    inputs:
+      - system_files_remap
+        #  - syslog_remap
+    target: stdout
+    type: console
+    encoding:
+      codec: json
+  vlogs:
+    inputs: [ "syslog_remap", "demo_logs_json","docker_logs", "system_files_remap" ]
+    type: "elasticsearch"
+    endpoints: [ "http://victorialogs:9428/insert/elasticsearch/" ]
+    mode: "bulk"
+    api_version: "v8"
+    healthcheck:
+      enabled: false
+    query:
+      _msg_field: "message"
+      _time_field: "timestamp"
+      _stream_fields: "host,container_name"
+
+        #sources:
+        #  docker_los:
+        #    type: docker_logs
+        #    auto_partial_merge: true
+      # docker_host: http://localhost:2375
+      #exclude_containers:
+      #- exclude_
+      #host_key: host
+      #include_containers:
+      #- include_
+      #include_images:
+      #- httpd
+      #include_labels:
+      #- org.opencontainers.image.vendor=Vector
+      #partial_event_marker_field: _partial
+      #retry_backoff_secs: 2
