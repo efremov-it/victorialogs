@@ -16,6 +16,8 @@ services:
     user: root
     # ports:
     #   - '8686:8686'
+    networks:
+      - vlogs
     depends_on:
       victorialogs:
         condition: service_healthy
@@ -33,7 +35,14 @@ services:
       GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: victorialogs-datasource,victoriametrics-datasource
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
-      # - ./grafana/plugins:/var/lib/grafana/plugins
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.example.com`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      - "traefik.http.routers.grafana.service=grafana"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+    networks:
+      - vlogs
     ports:
      - '127.0.0.1:3000:3000'
 
@@ -50,6 +59,14 @@ services:
       - -pushmetrics.extraLabel='instance=victorialogs'
       # - -httpAuth.username=admin
       # - -httpAuth.password=password
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.victorialogs.rule=Host(`victorialogs.example.com`)"
+      - "traefik.http.routers.victorialogs.entrypoints=websecure"
+      - "traefik.http.routers.victorialogs.service=victorialogs"
+      - "traefik.http.services.victorialogs.loadbalancer.server.port=9428"
+    networks:
+      - vlogs
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9428/health"]
       interval: 1s
@@ -67,6 +84,8 @@ services:
     volumes:
       - victorialogs-vector-docker-vm:/vmsingle
       - ./victoriametrics/scrape.yml:/promscrape.yml
+    networks:
+      - vlogs
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8428/health"]
       interval: 1s
@@ -78,7 +97,12 @@ services:
     ports: [ "127.0.0.1:8082:80" ]
     labels:
       com.docker.victorialogs: "True"
+    networks:
+      - vlogs
 volumes:
   victorialogs-vector-docker-vl:
   victorialogs-vector-docker-vm:
   grafana_data:
+
+networks:
+  vlogs:
