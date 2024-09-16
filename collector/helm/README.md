@@ -3,7 +3,14 @@ helm repo update
 
 helm show values vector/vector
 
-helm install vector vector/vector \
+helm upgrade --install vector-test vector/vector \
   --namespace vector \
   --create-namespace \
-  --values values.yaml
+  --values helm/values.yaml
+
+# Operator
+helm repo add vector-operator https://kaasops.github.io/vector-operator/helm
+helm repo update
+
+helm search repo vector-operator/
+

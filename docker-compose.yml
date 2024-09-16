@@ -2,7 +2,7 @@ version: '3.9'
 
 services:
   vector:
-    image: docker.io/timberio/vector:0.37.1-debian
+    image: docker.io/timberio/vector:0.38.0-alpine
     restart: on-failure
     volumes:
       - type: bind
@@ -12,10 +12,25 @@ services:
         source: /var/lib/docker
         target: /var/lib/docker
       - /var/log/:/var/log
+      # - ./collector/agent/vector.yaml:/etc/vector/vector.yaml:ro
       - ./collector/vector.yaml:/etc/vector/vector.yaml:ro
     user: root
     # ports:
     #   - '8686:8686'
+    networks:
+      - vlogs
+    depends_on:
+      victorialogs:
+        condition: service_healthy
+      victoriametrics:
+        condition: service_healthy
+  
+  aggregator:
+    image: docker.io/timberio/vector:0.38.0-alpine
+    restart: on-failure
+    volumes:
+      - ./collector/aggregator/vector.yaml:/etc/vector/vector.yaml:ro
+    user: root
     networks:
       - vlogs
     depends_on:
@@ -45,6 +60,15 @@ services:
       - vlogs
     ports:
      - '127.0.0.1:3000:3000'
+  grafana_2:
+    image: grafana/grafana:11.0.0
+    environment:
+    - GF_INSTALL_PLUGINS=https://github.com/VictoriaMetrics/victorialogs-datasource/releases/download/v0.4.0/victorialogs-datasource-v0.4.0.zip;victorialogs-datasource
+    - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=victorialogs-datasource
+    ports:
+    - 3001:3000/tcp
+    networks:
+      - vlogs
 
   victorialogs:
     image: docker.io/victoriametrics/victoria-logs:v0.5.2-victorialogs
@@ -64,11 +88,14 @@ services:
       - "traefik.http.routers.victorialogs.rule=Host(`victorialogs.example.com`)"
       - "traefik.http.routers.victorialogs.entrypoints=websecure"
       - "traefik.http.routers.victorialogs.service=victorialogs"
+      - "traefik.http.routers.victorialogs.middlewares=auth"
+      - "traefik.http.middlewares.auth.basicauth.users=test:$$apr1$$YvxVVXIc$$HLNUib1/NxBLVvw2ii2VM1,test2:$$apr1$$WJ59RfPU$$pfxZiefopRcbWztoUpCR31"
       - "traefik.http.services.victorialogs.loadbalancer.server.port=9428"
+      - "com.docker.victorialogs=True"
     networks:
       - vlogs
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:9428/health"]
+      test: ["CMD", "wget", "-qO-", "http://victorialogs:9428/health"]
       interval: 1s
       timeout: 1s
       retries: 10
@@ -84,10 +111,12 @@ services:
     volumes:
       - victorialogs-vector-docker-vm:/vmsingle
       - ./victoriametrics/scrape.yml:/promscrape.yml
+    labels:
+      com.docker.victorialogs: "True"
     networks:
       - vlogs
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8428/health"]
+      test: ["CMD", "wget", "-qO-", "http://victoriametrics:8428/health"]
       interval: 1s
       timeout: 1s
       retries: 10
@@ -99,6 +128,27 @@ services:
       com.docker.victorialogs: "True"
     networks:
       - vlogs
+
+  postgres:
+    image: postgres:16-alpine3.20
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+    networks:
+      - vlogs
+
+  rabbitmq:
+    image: rabbitmq:3.12.14-management-alpine
+    container_name: 'rabbitmq'
+    ports:
+        - 5672:5672
+        - 15672:15672
+    volumes:
+        - ./logs/:/var/log/rabbitmq
+    networks:
+      - vlogs
+
 volumes:
   victorialogs-vector-docker-vl:
   victorialogs-vector-docker-vm:

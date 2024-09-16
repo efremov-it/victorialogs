@@ -3,57 +3,139 @@ api:
   address: 0.0.0.0:8686
 
 sources:
-  demo_logs_json:
-    type: demo_logs
-    interval: 1
-    format: json
-  demo_logs_syslog:
-    type: "demo_logs"
-    format: "syslog"
-    count: 100
-    interval: 1
   docker_logs:
     type: docker_logs
     auto_partial_merge: true
     include_labels:
       - "com.docker.victorialogs=True"
-  system_files:
+  syslog:
+    type: file
+    include:
+      - /var/log/syslog
+    ignore_older: 86400
+    read_from: "beginning"
+  auth:
     type: file
     include:
       - /var/log/auth.log
-      - /var/log/syslog
+    ignore_older: 86400
+    read_from: "beginning"
+  kern:
+    type: file
+    include:
+      - /var/log/kern.log
+    ignore_older: 86400
+    read_from: "beginning"
+  bash_history:
+    type: file
+    include:
+      - /var/log/commands.log
+    ignore_older: 86400
+    read_from: "beginning"
+  dmesg:
+    type: file
+    include:
+      - /var/log/dmesg
+    ignore_older: 86400
+    read_from: "beginning"
+  dpkg:
+    type: file
+    include:
+      - /var/log/dpkg.log
+    ignore_older: 86400
+    read_from: "beginning"
+  traefik:
+    type: file
+    include:
+      - /var/log/traefik/*.log
+    ignore_older: 86400
+    read_from: "beginning"
+
 transforms:
-  system_files_remap:
+  process_syslog:
     type: remap
-    inputs:
-      - system_files
+    inputs: [syslog]
     source: |-
       structured = parse_syslog!(.message)
       . = merge(., structured)
-      .timestamp_test = to_unix_timestamp!(.timestamp)
+      .timestamp = to_unix_timestamp!(.timestamp)
       del(.timestamp)
+      .log_type = "syslog"
       .project = "local_test"
-    # .message = parse_json!(.message)
-    # .project = "local_test"
-  syslog_remap:
+  process_auth:
     type: remap
-    inputs: [demo_logs_syslog]
+    inputs: [auth]
     source: |-
-      structured = parse_syslog!(.message)
+      structured = parse_regex(.message, r'^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+\d{2}:\d{2}) (?P<hostname>[^\s]+) (?P<process>[^\[\s]+)(?:\[\d+\])?: (?P<message>.+)$') ?? {}
       . = merge(., structured)
+      del(.pid)
+      .log_type = "auth"
       .project = "local_test"
+  process_kern:
+    type: remap
+    inputs: [kern]
+    source: |-
+      structured = parse_regex(.message, r'^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+\d{2}:\d{2})\s+(?P<hostname>[^\s]+)\s+(?P<process>[^:]+):\s*(?P<message>.*)$') ?? {}
+      . = merge(., structured)
+      .log_type = "kern"
+      .project = "local_test"
+  process_dmesg:
+    type: remap
+    inputs: [dmesg]
+    source: |-
+      structured = parse_regex(.message, r'^(?P<timestamp>\w{3} \d{2} \d{2}:\d{2}:\d{2}) (?P<message>.*)$') ?? {}
+      . = merge(., structured)
+      .log_type = "dmesg"
+      .project = "local_test"
+  process_bash_history:
+    type: remap
+    inputs: [bash_history]
+    source: |-
+      structured = parse_regex(.message, r'(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+\d{2}:\d{2})\s+(?P<hostname>\S+)\s+Bash_History:\s+(?P<user>\S+)\s+:\s+(?P<user2>\S+)\s+:\s+(?P<path>\S+)\s+-\s+(\d+)\s+(?P<command>.+)') ?? {}
+      .hostname = structured.hostname
+      .user = structured.user
+      .log_type = "bash_history"
+      .project = "local_test"
+  process_docker:
+    type: remap
+    inputs: [docker_logs]
+    source: |-
+      .message = del(.message)
+      .stream = del(.stream)
+      .hostname = del(.host)
+      .log_type = "docker"
+      .project = "local_test"
+  process_dpkg:
+    type: remap
+    inputs: [dpkg]
+    source: |-
+      structured = parse_regex(.message, r'^(?P<timestamp>[^ ]+ [^ ]+) (?P<action>[^ ]+) (?P<package>[^ ]+:amd64)? ?(?P<previous_version>[^ ]+)? ?(?P<version>[^ ]+)?$') ?? {}
+      . = merge(., structured)
+      .timestamp = parse_timestamp!(.timestamp, "%Y-%m-%d %H:%M:%S")
+      .hostname = del(.host)
+      .log_type = "dpkg"
+      .project = "local_test"
+# TODO отсеивать 2хх
+  process_traefik:
+    type: remap
+    inputs: [traefik]
+    source: |-
+      structured = parse_json(.message) ?? {}
+      . = merge(., structured)
+      .timestamp = parse_timestamp!(.timestamp, "%Y-%m-%d %H:%M:%S")
+      .log_type = "traefik"
+      .project = "flypost"
 
 sinks:
   console:
     inputs:
-      - system_files_remap
-        #  - syslog_remap
+      - process_dpkg
     target: stdout
     type: console
     encoding:
       codec: json
   vlogs:
-    inputs: [ "syslog_remap", "demo_logs_json","docker_logs", "system_files_remap" ]
+    inputs: [ "process_syslog", "process_auth", "process_kern", "process_dmesg","process_bash_history", "process_dpkg" ]
     type: "elasticsearch"
     endpoints: [ "http://victorialogs:9428/insert/elasticsearch/" ]
     mode: "bulk"
@@ -63,21 +145,4 @@ sinks:
     query:
       _msg_field: "message"
       _time_field: "timestamp"
-      _stream_fields: "host,container_name"
-
-        #sources:
-        #  docker_los:
-        #    type: docker_logs
-        #    auto_partial_merge: true
-      # docker_host: http://localhost:2375
-      #exclude_containers:
-      #- exclude_
-      #host_key: host
-      #include_containers:
-      #- include_
-      #include_images:
-      #- httpd
-      #include_labels:
-      #- org.opencontainers.image.vendor=Vector
-      #partial_event_marker_field: _partial
-      #retry_backoff_secs: 2
+      _stream_fields: "hostname,process,source,log_type,container_name,user,project"

@@ -1,0 +1,22 @@
+api:
+  enabled: true
+  address: 0.0.0.0:8686
+
+sources:
+  docker_logs:
+    type: docker_logs
+    auto_partial_merge: true
+    include_labels:
+      - "com.docker.victorialogs=True"
+  host_logs:
+    type: file
+    include:
+      - /var/log/syslog
+      - /var/log/auth.log
+      - /var/log/kern.log
+
+sinks:
+  aggregator:
+    type: vector
+    inputs: ["host_logs", "docker_logs"]
+    address: "aggregator:9000"

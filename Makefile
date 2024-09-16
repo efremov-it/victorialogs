@@ -7,3 +7,8 @@ up:
 
 down:
 	$(DC) -f $(DF) down
+
+r:
+	$(DC) -f $(DF) restart vector
+
+re: down up

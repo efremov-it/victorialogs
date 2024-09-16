@@ -1,0 +1,50 @@
+sources:
+  agent_logs:
+    type: socket
+    address: "0.0.0.0:9000" 
+    mode: tcp
+    encoding:
+      codec: json
+transforms:
+  process_syslog:
+    type: remap
+    inputs: [agent_logs]
+    source: |-
+      structured = parse_syslog!(.message)
+      . = merge(., structured)
+      .timestamp = to_unix_timestamp!(.timestamp)
+      del(.timestamp)
+      .project = "local_test"
+  process_docker:
+    type: remap
+    inputs: [agent_logs]
+    source: |-
+      .message = del(.log) # Docker logs have the actual log message in the 'log' field
+      .stream = del(.stream) # This field indicates stdout or stderr
+      .timestamp = to_unix_timestamp!(del(.time)) # Convert the timestamp to a Unix timestamp
+      .project = "local_test" # Add a custom project field
+  process_kube:
+    type: remap
+    inputs: [agent_logs]
+    source: |-
+      .container_name = del(.kubernetes.container_name)
+      .message = del(.message)
+      .timestamp = to_unix_timestamp!(del(.timestamp))
+      .project = "stt"
+  all_processed_logs:
+    type: aggregate
+    inputs: ["process_syslog", "process_docker", "process_kube"]
+
+sinks:
+  vlogs:
+    inputs: [ "all_processed_logs" ]
+    type: "elasticsearch"
+    endpoints: [ "http://victorialogs:9428/insert/elasticsearch/" ]
+    mode: "bulk"
+    api_version: "v8"
+    healthcheck:
+      enabled: false
+    query:
+      _msg_field: "message"
+      _time_field: "timestamp"
+      _stream_fields: "host,container_name"
